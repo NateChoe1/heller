@@ -2,12 +2,18 @@ package dev.natechoe.heller;
 
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Arrays;
 
 public class Deflate {
     /* Lx takes 5 bytes, assuming initial byte alignment */
     public static final int CMD_SIZE = 5;
+
+    private static String[] fixedCodes;
+    private static String[] distanceCodes;
 
     public static Bytes literalHeader(int length, boolean bfinal) {
         if (length > 0xffff) {
@@ -50,6 +56,59 @@ public class Deflate {
 
     public static Bytes literal(Bytes data) {
         return Deflate.literal(data, false);
+    }
+
+    /* expresses v as an l bit binary string, including leading zeros and
+     * truncating higher order bits */
+    private static String expand(long v, int l, boolean lsbf) {
+        char[] d = new char[l];
+        int start = lsbf ? 0 : l-1;
+        int offset = lsbf ? 1 : -1;
+        for (int i = 0; i < l; ++i) {
+            d[start + offset*i] = (char) ((v & 1) + '0');
+            v >>= 1;
+        }
+        return new String(d);
+    }
+
+    private static String expand(long v, int l) {
+        return expand(v, l, false);
+    }
+
+    /* converts from a set of code lengths into a set of huffman codes
+     * assumes that no code is longer than 63 bits */
+    static String[] genTree(int[] lengths) {
+        TreeMap<Integer, List<Integer>> lm = new TreeMap<>();
+        for (int i = 0; i < lengths.length; ++i) {
+            if (!lm.containsKey(lengths[i])) {
+                lm.put(lengths[i], new ArrayList<>());
+            }
+            lm.get(lengths[i]).add(i);
+        }
+
+        long b = 0;
+        int pl = 0;
+        String[] ret = new String[lengths.length];
+        for (Map.Entry<Integer, List<Integer>> lengthClass: lm.entrySet()) {
+            int length = lengthClass.getKey();
+            List<Integer> values = lengthClass.getValue();
+
+            if (pl != 0) {
+                b <<= (length - pl);
+            }
+            pl = length;
+
+            for (int i: values) {
+                String s = Deflate.expand(b, length);
+                ret[i] = s;
+                ++b;
+            }
+        }
+
+        if (b != (1l << pl)) {
+            return null;
+        }
+        return ret;
     }
 
     private static class BitTree {
@@ -115,60 +174,121 @@ public class Deflate {
         }
     }
 
-    /* expresses v as an l bit binary string, including leading zeros and
-     * truncating higher order bits */
-    private static String expand(long v, int l) {
-        char[] d = new char[l];
-        for (int i = l-1; i >= 0; --i) {
-            d[i] = (char) ((v & 1) + '0');
-            v >>= 1;
+    private static class RepeatEntry {
+        Map<Integer, BitTree> noLiteral;
+        Map<Integer, BitTree> literal;
+        public RepeatEntry(Map<Integer, BitTree> noLiteral, Map<Integer, BitTree> literal) {
+            this.noLiteral = noLiteral;
+            this.literal = literal;
         }
-        return new String(d);
+
+        public RepeatEntry() {
+            this(new HashMap<>(), new HashMap<>());
+        }
     }
 
-    /* converts from a set of code lengths into a set of huffman codes
-     * assumes that no code is longer than 63 bits */
-    static String[] genTree(int[] lengths) {
-        TreeMap<Integer, List<Integer>> lm = new TreeMap<>();
-        for (int i = 0; i < lengths.length; ++i) {
-            if (!lm.containsKey(lengths[i])) {
-                lm.put(lengths[i], new ArrayList<>());
-            }
-            lm.get(lengths[i]).add(i);
-        }
+    static {
+        int[] fixedLengths = new int[288];
+        for (int i = 0; i < 144; ++i) fixedLengths[i] = 8;
+        for (int i = 144; i < 256; ++i) fixedLengths[i] = 9;
+        for (int i = 256; i < 280; ++i) fixedLengths[i] = 7;
+        for (int i = 280; i < 288; ++i) fixedLengths[i] = 8;
 
-        long b = 0;
-        int pl = 0;
-        String[] ret = new String[lengths.length];
-        for (Map.Entry<Integer, List<Integer>> lengthClass: lm.entrySet()) {
-            int length = lengthClass.getKey();
-            List<Integer> values = lengthClass.getValue();
+        Deflate.fixedCodes = genTree(fixedLengths);
 
-            if (pl != 0) {
-                b <<= (length - pl);
-            }
-            pl = length;
+        int[] distanceLengths = new int[32];
+        for (int i = 0; i < 32; ++i) distanceLengths[i] = 5;
+        Deflate.distanceCodes = genTree(distanceLengths);
+    }
 
-            for (int i: values) {
-                String s = expand(b, length);
-                ret[i] = s;
-                ++b;
-            }
-        }
-
-        if (b != (1l << pl)) {
+    /* TODO: maybe some duplication here, it's probably fine */
+    public static String repeatCode(int length, int distance) {
+        if (length < 3 || length > 258) {
             return null;
         }
-        return ret;
+
+        StringBuilder sb = new StringBuilder("");
+
+        getLength: {
+            int[] bits = new int[] {
+                0, 0, 0, 0, 0, 0, 0, 0,
+                1, 1, 1, 1,
+                2, 2, 2, 2,
+                3, 3, 3, 3,
+                4, 4, 4, 4,
+                5, 5, 5, 5,
+                0,
+            };
+            int firstCode = 257;
+            int firstLength = 3;
+            for (int i = 0; i < bits.length; ++i) {
+                int endLength = firstLength + (1 << bits[i]);
+                if (length >= endLength) {
+                    firstLength = endLength;
+                    continue;
+                }
+
+                int code = firstCode + i;
+                sb.append(Deflate.fixedCodes[code]);
+
+                int offset = length - firstLength;
+                sb.append(Deflate.expand(offset, bits[i], true));
+                break getLength;
+            }
+            return null;
+        }
+
+        getDistance: {
+            int[] bits = new int[] {
+                0, 0, 0, 0,
+                1,  1,
+                2,  2,
+                3,  3,
+                4,  4,
+                5,  5,
+                6,  6,
+                7,  7,
+                8,  8,
+                9,  9,
+                10, 10,
+                11, 11,
+                12, 12,
+                13, 13,
+            };
+            int firstDistance = 1;
+            for (int i = 0; i < bits.length; ++i) {
+                int endDistance = firstDistance + (1 << bits[i]);
+                if (distance >= endDistance) {
+                    firstDistance = endDistance;
+                    continue;
+                }
+
+                sb.append(Deflate.distanceCodes[i]);
+                int offset = distance - firstDistance;
+                sb.append(Deflate.expand(offset, bits[i], true));
+                break getDistance;
+            }
+        }
+
+        return sb.toString();
     }
 
-    /**/
-    public static Map<Integer, Bytes> repeat(int length, int offset,
+    public static List<Bytes> repeat(int length, int offset,
             boolean bfinal) {
+        List<RepeatEntry> cache = new ArrayList<>();
+
+        /* initialize cache */
+        cache.add(new RepeatEntry());
+        cache.add(new RepeatEntry());
+        cache.add(new RepeatEntry());
+        Map<Integer, BitTree> emptyFixed = new HashMap<>();
+        emptyFixed.put(0, new BitTree("001", bfinal));
+        cache.add(new RepeatEntry(emptyFixed, new HashMap<>()));
+
         return null;
     }
 
-    public static Map<Integer, Bytes> repeat(int length, int offset) {
+    public static List<Bytes> repeat(int length, int offset) {
         return Deflate.repeat(length, offset, false);
     }
 }
