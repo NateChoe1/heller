@@ -5,11 +5,11 @@ import java.util.*;
 
 public class App {
     public static void main(String[] args) {
-        List<Bytes> repeatPossibilities = Deflate.repeat(17, 17, 10, false);
-        System.out.println(repeatPossibilities.size());
-        for (Bytes block: repeatPossibilities) {
-            for (Byte b: block) {
-                System.out.printf("%02x ", b);
+        for (int l = 5; l <= 40; ++l) {
+            List<Bytes> r = Deflate.repeat(l, l, 20, false);
+            System.out.printf("%d: ", l);
+            for (Bytes b: r) {
+                System.out.printf("%d, ", b.size());
             }
             System.out.println();
         }

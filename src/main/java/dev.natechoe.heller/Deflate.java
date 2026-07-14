@@ -176,11 +176,11 @@ public class Deflate {
     }
 
     private static class RepeatEntry {
-        Map<Integer, BitTree> noLiteral;
-        Map<Integer, BitTree> literal;
-        public RepeatEntry(Map<Integer, BitTree> noLiteral, Map<Integer, BitTree> literal) {
-            this.noLiteral = noLiteral;
-            this.literal = literal;
+        Map<Integer, BitTree> inRepeat;
+        Map<Integer, BitTree> noRepeat;
+        public RepeatEntry(Map<Integer, BitTree> inRepeat, Map<Integer, BitTree> noRepeat) {
+            this.inRepeat = inRepeat;
+            this.noRepeat = noRepeat;
         }
 
         public RepeatEntry() {
@@ -279,12 +279,9 @@ public class Deflate {
         List<RepeatEntry> cache = new ArrayList<>();
 
         /* initialize cache */
-        cache.add(new RepeatEntry());
-        cache.add(new RepeatEntry());
-        cache.add(new RepeatEntry());
-        Map<Integer, BitTree> emptyFixed = new HashMap<>();
-        emptyFixed.put(0, new BitTree("010", bfinal));
-        cache.add(new RepeatEntry(emptyFixed, new HashMap<>()));
+        Map<Integer, BitTree> initialState = new HashMap<>();
+        initialState.put(0, new BitTree("", false));
+        cache.add(new RepeatEntry(new HashMap<>(), initialState));
 
         String[] repeatCodes = new String[259];
         for (int i = 0; i < repeatCodes.length; ++i) {
@@ -295,10 +292,20 @@ public class Deflate {
         List<Bytes> ret = new ArrayList<>();
 
         for (;;) {
-            boolean finished = true;
             int currLength = cache.size();
 
-            Map<Integer, BitTree> noLiteral = new HashMap<>();
+            Map<Integer, BitTree> inRepeat = new HashMap<>();
+            Map<Integer, BitTree> noRepeat = new HashMap<>();
+
+            /* start every possible repeat block */
+            if (currLength >= 3) {
+                for (Map.Entry<Integer, BitTree> prevCode: cache.get(currLength-3).noRepeat.entrySet()) {
+                    int prevLength = prevCode.getKey();
+                    BitTree prevBits = prevCode.getValue();
+                    BitTree newTree = new BitTree("010", bfinal, prevBits);
+                    inRepeat.put(prevLength, newTree);
+                }
+            }
 
             for (int l = 0; l < repeatCodes.length; ++l) {
                 String repeatCode = repeatCodes[l];
@@ -307,7 +314,7 @@ public class Deflate {
                 }
 
                 for (Map.Entry<Integer, BitTree> prevCode:
-                        cache.get(currLength - repeatCode.length()).noLiteral.entrySet()) {
+                        cache.get(currLength - repeatCode.length()).inRepeat.entrySet()) {
                     int prevLength = prevCode.getKey();
                     BitTree prevBits = prevCode.getValue();
 
@@ -320,29 +327,76 @@ public class Deflate {
                     }
 
                     /* we already have a code with this length */
-                    if (noLiteral.containsKey(newLength)) {
+                    if (inRepeat.containsKey(newLength)) {
                         continue;
                     }
 
                     /* this is a new (encoded length, decoded length) combo, add
                      * it */
-                    noLiteral.put(newLength, new BitTree(repeatCode, false, prevBits));
-                    finished = false;
+                    inRepeat.put(newLength, new BitTree(repeatCode, false, prevBits));
                 }
             }
 
-            if ((currLength + endCode.length()) % 8 == 0) {
-                for (Map.Entry<Integer, BitTree> encoding: noLiteral.entrySet()) {
+            /* end every possible repeat block */
+            if (currLength >= endCode.length()) {
+                for (Map.Entry<Integer, BitTree> prevCode: cache.get(currLength-endCode.length()).inRepeat.entrySet()) {
+                    int prevLength = prevCode.getKey();
+                    BitTree prevBits = prevCode.getValue();
+                    if (noRepeat.containsKey(prevLength)) {
+                        continue;
+                    }
+                    BitTree newBits = new BitTree(endCode, false, prevBits);
+                    noRepeat.put(prevLength, newBits);
+                }
+            }
+
+            /* start every print 0 block */
+            if (currLength % 8 == 0) {
+                for (int padding = 0; padding < 8; ++padding) {
+                    /* print 0 goes like this:
+                     * 0   (bfinal)
+                     * 00  (literal)
+                     * [padding]
+                     * 0000000000000000  (len)
+                     * 1111111111111111  (nlen)
+                     * this is 35 bits + the amount of padding
+                     * we pad to the nearest byte, so padding can be anywhere
+                     * from 0 to 7 inclusive.
+                     * */
+                    int lookBehind = padding + 35;
+                    StringBuilder sb = new StringBuilder("000");
+                    for (int i = 0; i < padding; ++i) {
+                        sb.append('0');
+                    }
+                    sb.append("0000000000000000");
+                    sb.append("1111111111111111");
+                    String print0 = sb.toString();
+                    if (print0.length() > currLength) {
+                        break;
+                    }
+                    for (Map.Entry<Integer, BitTree> prevCode: cache.get(currLength - lookBehind).noRepeat.entrySet()) {
+                        int prevLength = prevCode.getKey();
+                        BitTree prevBits = prevCode.getValue();
+                        if (noRepeat.containsKey(prevLength)) {
+                            continue;
+                        }
+                        BitTree newBits = new BitTree(print0, bfinal, prevBits);
+                        noRepeat.put(prevLength, newBits);
+                    }
+                }
+            }
+
+            if (currLength % 8 == 0) {
+                for (Map.Entry<Integer, BitTree> encoding: noRepeat.entrySet()) {
                     if (encoding.getKey() != length) {
                         continue;
                     }
-                    BitTree b = new BitTree(endCode, false, encoding.getValue());
-                    ret.add(b.reconstruct());
+                    ret.add(encoding.getValue().reconstruct());
                     break;
                 }
             }
 
-            cache.add(new RepeatEntry(noLiteral, new HashMap<>()));
+            cache.add(new RepeatEntry(inRepeat, noRepeat));
 
             if (currLength >= limit*8) {
                 break;
