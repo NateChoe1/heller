@@ -409,4 +409,159 @@ public class Deflate {
     public static List<Bytes> repeat(int length, int offset, int limit) {
         return Deflate.repeat(length, offset, limit, false);
     }
+
+    public static Bytes repeatExact(int length, int offset, int target, boolean bfinal) {
+        List<Bytes> candidates = Deflate.repeat(length, offset, target, bfinal);
+        for (Bytes b: candidates) {
+            if (b.size() == target) {
+                return b;
+            }
+        }
+        return null;
+    }
+
+    public static Bytes repeatExact(int length, int offset, int target) {
+        return Deflate.repeatExact(length, offset, target, false);
+    }
+
+    public static Bytes repeatGreedy(int length, int offset, boolean bfinal) {
+        BitTree ret = new BitTree("010", bfinal);
+        int encodedLength = 3;
+
+        while (length > 0) {
+            /* maximum repeat length */
+            int partLength;
+            if (length > 258 && length % 258 < 3) {
+                partLength = 255;
+            } else {
+                partLength = Math.min(length, 258);
+            }
+
+            String part = Deflate.repeatCode(partLength, offset);
+            encodedLength += part.length();
+            ret = new BitTree(part, false, ret);
+            length -= partLength;
+        }
+
+        /* end repeat block */
+        ret = new BitTree(fixedCodes[256], false, ret);
+        encodedLength += fixedCodes[256].length();
+
+        if (encodedLength % 8 == 0) {
+            return ret.reconstruct();
+        }
+
+        /* pad with a print 0 */
+        ret = new BitTree("000", bfinal, ret);
+        encodedLength += 3;
+        StringBuilder padding = new StringBuilder("");
+        while (encodedLength % 8 != 0) {
+            padding.append('0');
+            ++encodedLength;
+        }
+        padding.append("0000000000000000");
+        padding.append("1111111111111111");
+        ret = new BitTree(padding.toString(), false, ret);
+        return ret.reconstruct();
+    }
+
+    public static Bytes repeatGreedy(int length, int offset) {
+        return Deflate.repeatGreedy(length, offset, false);
+    }
+
+    public static Bytes quine(Bytes header) {
+        /* this is an idealized lz77 quine, where each line takes up exactly the
+         * same amount of space. i've labeled one section which repeats twice
+         * "R".
+         *
+         * print H+1
+         *   H
+         *   print H+1
+         * repeat H+1 H+1    
+         * print 0           
+         * print 0           
+         * print 4
+         *   repeat H+1 H+1  
+         *   print 0         
+         *   print 0         
+         *   print 4
+         * repeat 4 4
+         * print 4
+         *   repeat 4 4
+         *   print 4
+         *   repeat 4 4
+         *   print 4
+         * repeat 4 4
+         * print 4
+         *   a     (this can be any arbitrary data)
+         *   b
+         *   c
+         *   d
+         *
+         * this entire quine can be constructed using 5 bytes per line, adding
+         * some padding whenever necessary. the "repeat 4 4" construct can be
+         * implemented as "repeat 10 20; repeat 10 20" and be padded to exactly
+         * 5 bytes. the only challenging part is Rh, since repeat blocks can
+         * have variable compressed length. the only constraint is that Rh fits
+         * into exactly 15 bytes.
+         *
+         * it turns out that any repeat length from 3-808 bytes can be encoded
+         * using precisely 15 bytes. for anything bigger than that we need
+         * another trick.
+         *
+         * print H+1
+         *   H
+         *   print H+1
+         * repeat H+1 H+1    (L = length of this line)
+         * print L+1
+         *   repeat H+1 H+1
+         *   print L+1
+         * repeat L+1 L+1
+         * print 0
+         * print 0
+         * print 4
+         * ...
+         *
+         * it's possible to add an arbitrary tail, but for the quine pattern i'm
+         * envisioning i don't need one
+         * */
+
+        Bytes ret = new Bytes();
+
+        int augmentedHeaderSize = header.size() + Deflate.CMD_SIZE;
+        Bytes printH1 = Deflate.literalHeader(augmentedHeaderSize);
+        ret.append(printH1);
+        ret.append(header);
+        ret.append(printH1);
+
+        /* the header is too long for a 15 byte repeat, shrink the header and
+         * recurse */
+        if (header.size() + Deflate.CMD_SIZE > 808) {
+            header = Deflate.repeatGreedy(augmentedHeaderSize, augmentedHeaderSize);
+            ret.append(header);
+            ret.append(Deflate.quine(header));
+            return ret;
+        }
+
+        Bytes RH1 = Deflate.repeatExact(augmentedHeaderSize, augmentedHeaderSize, Deflate.CMD_SIZE*3);
+        Bytes R44 = Deflate.repeatExact(Deflate.CMD_SIZE*4, Deflate.CMD_SIZE*4, Deflate.CMD_SIZE);
+        Bytes P4 = Deflate.literalHeader(Deflate.CMD_SIZE*4);
+        ret.append(RH1);
+        ret.append(P4);
+        ret.append(RH1);
+        ret.append(P4);
+        ret.append(R44);
+        ret.append(P4);
+        ret.append(R44);
+        ret.append(P4);
+        ret.append(R44);
+        ret.append(P4);
+        ret.append(R44);
+        ret.append(P4);
+
+        /* 20 bytes of arbitrary data, this could be anything */
+        ret.append(new Bytes("https://natechoe.dev".getBytes()));
+
+        return ret;
+    }
 }
