@@ -152,7 +152,7 @@ public class Deflate {
             for (int i = fullData.size()-1; i >= 0; --i) {
                 char[] s = fullData.get(i).toCharArray();
                 if (i == bfinalIdx) {
-                    s[0] = 1;
+                    s[0] = '1';
                 }
                 for (char c: s) {
                     byte b = (byte) (c == '1' ? 1 : 0);
@@ -162,6 +162,7 @@ public class Deflate {
 
                     if (length % 8 == 0) {
                         ret.append(thisByte);
+                        thisByte = 0;
                     }
                 }
             }
@@ -202,7 +203,7 @@ public class Deflate {
     }
 
     /* TODO: maybe some duplication here, it's probably fine */
-    public static String repeatCode(int length, int distance) {
+    private static String repeatCode(int length, int distance) {
         if (length < 3 || length > 258) {
             return null;
         }
@@ -273,7 +274,7 @@ public class Deflate {
         return sb.toString();
     }
 
-    public static List<Bytes> repeat(int length, int offset,
+    public static List<Bytes> repeat(int length, int offset, int limit,
             boolean bfinal) {
         List<RepeatEntry> cache = new ArrayList<>();
 
@@ -282,13 +283,76 @@ public class Deflate {
         cache.add(new RepeatEntry());
         cache.add(new RepeatEntry());
         Map<Integer, BitTree> emptyFixed = new HashMap<>();
-        emptyFixed.put(0, new BitTree("001", bfinal));
+        emptyFixed.put(0, new BitTree("010", bfinal));
         cache.add(new RepeatEntry(emptyFixed, new HashMap<>()));
 
-        return null;
+        String[] repeatCodes = new String[259];
+        for (int i = 0; i < repeatCodes.length; ++i) {
+            repeatCodes[i] = Deflate.repeatCode(i, offset);
+        }
+
+        String endCode = Deflate.fixedCodes[256];
+        List<Bytes> ret = new ArrayList<>();
+
+        for (;;) {
+            boolean finished = true;
+            int currLength = cache.size();
+
+            Map<Integer, BitTree> noLiteral = new HashMap<>();
+
+            for (int l = 0; l < repeatCodes.length; ++l) {
+                String repeatCode = repeatCodes[l];
+                if (repeatCode == null || repeatCode.length() > currLength) {
+                    continue;
+                }
+
+                for (Map.Entry<Integer, BitTree> prevCode:
+                        cache.get(currLength - repeatCode.length()).noLiteral.entrySet()) {
+                    int prevLength = prevCode.getKey();
+                    BitTree prevBits = prevCode.getValue();
+
+                    int newLength = prevLength + l;
+
+                    /* adding this code to this candidate overshoots the target
+                     * length*/
+                    if (newLength > length) {
+                        continue;
+                    }
+
+                    /* we already have a code with this length */
+                    if (noLiteral.containsKey(newLength)) {
+                        continue;
+                    }
+
+                    /* this is a new (encoded length, decoded length) combo, add
+                     * it */
+                    noLiteral.put(newLength, new BitTree(repeatCode, false, prevBits));
+                    finished = false;
+                }
+            }
+
+            if ((currLength + endCode.length()) % 8 == 0) {
+                for (Map.Entry<Integer, BitTree> encoding: noLiteral.entrySet()) {
+                    if (encoding.getKey() != length) {
+                        continue;
+                    }
+                    BitTree b = new BitTree(endCode, false, encoding.getValue());
+                    ret.add(b.reconstruct());
+                    break;
+                }
+            }
+
+            cache.add(new RepeatEntry(noLiteral, new HashMap<>()));
+
+            if (currLength >= limit*8) {
+                break;
+            }
+        }
+
+        return ret;
     }
 
-    public static List<Bytes> repeat(int length, int offset) {
-        return Deflate.repeat(length, offset, false);
+    public static List<Bytes> repeat(int length, int offset, int limit) {
+        return Deflate.repeat(length, offset, limit, false);
     }
 }
