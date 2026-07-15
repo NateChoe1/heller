@@ -4,7 +4,7 @@
  * I've modified this slightly to improve JVM interoperability, nothing of
  * substance has really changed though. The original zip quine generator was
  * released under the MIT license, so this package is released under the same
- * license. This license doesn't apply to the rest of fugue, only this package.
+ * license. This license doesn't apply to the rest of heller, only this package.
  *
  * MIT License
  *
@@ -58,45 +58,6 @@ class CRC32Engine {
         }
 
         /**
-         * Solves a "rank 1" CRC. This means that there's one file with one CRC
-         * value which may have to occur within the file itself. For example,
-         * the string
-         *
-         * "The CRC-32 checksum of this file is \"\x36\x4a\x09\xca\""
-         *
-         * (sourced from https://natechoe.dev/blog/2025/08/25/0-migrated.html)
-         *
-         * is a rank-1 CRC, as the bytes of the CRC appear within the message
-         * itself.
-         *
-         * This is a specific case of rank-n CRCs, where we may have multiple
-         * files with checksums that appear in each other.
-         *
-         * This overwrites the bytes in `data`
-         *
-         * @param data is the data of the quine, with 4 nonce bytes at each of
-         * the offsets
-         * @param offsets are the locations where the CRC appears
-         * within the file.
-         */
-        @JvmStatic
-        fun solveRank1CRC(data: ByteArray, offsets: Set<Int>) {
-            val map = HashMap<Int, Int>()
-            for (offset in offsets) {
-                map.put(offset, 0)
-            }
-
-            var crcBytesValues = solveCRCSystem(Pair(data, map))
-            var crcBytes = crcBytesValues[0]
-            for (offset in offsets) {
-                data[offset+0] = crcBytes[0]
-                data[offset+1] = crcBytes[1]
-                data[offset+2] = crcBytes[2]
-                data[offset+3] = crcBytes[3]
-            }
-        }
-
-        /**
          * Solves a CRC system with multiple files which potentially reference
          * each others's CRCs using Gauss-Jordan elimination.
          *
@@ -106,7 +67,7 @@ class CRC32Engine {
          * @return The CRCs of each file
          */
         @JvmStatic
-        fun solveCRCSystem(vararg files: Pair<ByteArray, Map<Int, Int>>): Array<ByteArray> {
+        public fun solveCRCSystem(target: ByteArray, files: List<Pair<ByteArray, Map<Int, Int>>>): List<ByteArray> {
             val n = files.size
 
             // Augmented matrix of polynomials
@@ -144,9 +105,24 @@ class CRC32Engine {
                 }
             }
 
+            var targetOffset = 0UL
+            if (target != null) {
+                for (byte in target) {
+                    var bu = byte.toUByte().toULong()
+                    for (i in 0..<8) {
+                        targetOffset = targetOffset shl 1
+                        targetOffset = targetOffset or ((bu shr i) and 1UL)
+                    }
+                }
+            }
+
             for (file in 0 until n) {
-                matrix[file][file] = matrix[file][file] xor 1UL
                 matrix[file][n] = matrix[file][n] xor 0xffffffffUL
+                if (target == null) {
+                    matrix[file][file] = matrix[file][file] xor 1UL
+                } else {
+                    matrix[file][n] = matrix[file][n] xor targetOffset
+                }
             }
 
             // Convert to upper triangular matrix
@@ -194,7 +170,7 @@ class CRC32Engine {
                 results[row] = divide(results[row], matrix[row][row], POLYNOMIAL)
             }
 
-            return Array(n,
+            return List(n,
                 fun(i: Int): ByteArray {
                     var implementationValue = 0UL
                     val mathematicalValue = results[i]
