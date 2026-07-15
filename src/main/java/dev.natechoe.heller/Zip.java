@@ -1,7 +1,10 @@
 package dev.natechoe.heller;
 
-import dev.natechoe.crc32.CRC32Engine;
+import java.util.List;
+import java.util.ArrayList;
 import java.util.zip.Deflater;
+
+import dev.natechoe.crc32.CRC32Engine;
 
 public class Zip {
     public static class ZipEntry {
@@ -11,10 +14,22 @@ public class Zip {
         byte[] crc;
         int offset;
         int compressedSize;
+        int modtime;
+        int moddate;
         ZipEntry(String filename, Bytes content, boolean isPlaintext) {
             this.filename = filename;
             this.content = content;
             this.isPlaintext = isPlaintext;
+        }
+    }
+
+    public static class QuineLayer {
+        String filename;
+        List<Integer> members;
+
+        QuineLayer(String filename, List<Integer> members) {
+            this.filename = filename;
+            this.members = members;
         }
     }
 
@@ -27,7 +42,10 @@ public class Zip {
         return ret;
     }
 
-    public static Bytes createZip(ZipEntry[] files) {
+    private static final int LH_BASE = 30; /* local header base size */
+    private static final int CH_BASE = 46; /* central header base size */
+
+    private static Bytes createLocalHeaders(ZipEntry[] files) {
         Bytes ret = new Bytes();
 
         for (int i = 0; i < files.length; ++i) {
@@ -53,6 +71,8 @@ public class Zip {
             /* TODO: maybe set these to something meaningful */
             ret.append(new byte[] { 0, 0 });  /* last mod time */
             ret.append(new byte[] { 0, 0 });  /* last mod date */
+            files[i].modtime = 0;
+            files[i].moddate = 0;
 
             /* crc-32 */
             byte[] content = files[i].content.toArray(null);
@@ -96,95 +116,292 @@ public class Zip {
             ret.append(compressedData);
         }
 
-        int cdStart = ret.size();
-        for (int i = 0; i < files.length; ++i) {
-            /* central directory header magic bytes */
-            ret.append(new byte[] {
-                (byte) 0x50,
+        return ret;
+    }
+
+    /* nc<3 */
+    private final static byte[] crc = new byte[] { 0x6e, 0x63, 0x3c, 0x33 };
+
+    private static enum SegmentType {
+        HEADER,
+        LITERAL,
+        LH,
+        CD
+    }
+
+    private static class Segment {
+        SegmentType type;
+        Bytes data;
+        int offset;
+
+        Segment(SegmentType type, Bytes data, int offset) {
+            this.type = type;
+            this.data = data;
+            this.offset = offset;
+        }
+    }
+
+    /* to make things easier, every loopy quine layer has the same crc checksum
+     * and the same length. it's definitely possible to remove these
+     * constraints, but it's unnecessary and makes things more complicated than
+     * i'd like.
+     *
+     * simplified, zip files look like this:
+     *   local file header 1
+     *   file data 1
+     *   local file header 2
+     *   file data 2
+     *   local file header 3
+     *   file data 3
+     *   ...
+     *   local file header n
+     *   file data n
+     *   central directory record 1
+     *   central directory record 2
+     *   ...
+     *   central directory record n
+     *   end of central directory record
+     *
+     * zip files are entirely identified by their end of central directory
+     * record. this means that local file headers and file data can be spread
+     * throughout the zip archive, potentially including empty space between
+     * them or even overlapping.
+     *
+     * in each loopy zip quine there are two classes of files: the zip quine
+     * itself and the auxiliary files we include with it. every layer includes
+     * every auxiliary file, and we select which files to include/exclude in
+     * each layer through the central directory. the zip quine itself is always
+     * the last zip file in the archive.
+     *
+     * define the "header" to be the common data between every zip layer. this
+     * includes the first n-1 local file headers and file data, as well as 4k
+     * extra bytes to fix crcs (where k is the number of layers).
+     *
+     * we want to iterate between the following:
+     *
+     *   H
+     *   LH1
+     *   [layer 1 data]
+     *   CD1
+     *
+     * =>
+     *
+     *   H
+     *   LH2
+     *   [layer 2 data]
+     *   CD2
+     *
+     * =>
+     *
+     *   H
+     *   LH3
+     *   [layer 3 data]
+     *   CD3
+     *
+     * =>
+     *
+     *   ...
+     *
+     * =>
+     *
+     *   H
+     *   LHk
+     *   [layer k data]
+     *   CDk
+     *
+     * =>
+     *
+     *   H
+     *   LH1
+     *   [layer 1 data]
+     *   CD1
+     *
+     * this is done as follows:
+     *
+     * H
+     * LH1
+     *   print H
+     *   H          -- label: o
+     *   print 2
+     *   LH2        -- label: l
+     *   print H
+     *   repeat H, o
+     *
+     *   print 4
+     *   print 2
+     *   LH3
+     *   print H
+     *   repeat H, o
+     *
+     *   print 5
+     *   print 4
+     *   print 2
+     *   LH4
+     *   print H
+     *   repeat H, o
+     *
+     *   ..
+     *
+     *   print k+1
+     *   print k
+     *   print k-1
+     *   ...
+     *   print 4
+     *   print 2
+     *   LHk
+     *   print H
+     *   repeat H, o
+     *
+     *   print k+2
+     *   print k+1
+     *   ...
+     *   print 4
+     *   print 2
+     *   LH1
+     *   print H
+     *   repeat H, o
+     *
+     *   print k
+     *     print k+2
+     *     print k+1
+     *     ...
+     *     print 4
+     *     print 2
+     *   repeat 1, l
+     *   print 2
+     *     print H
+     *     repeat H, o
+     *
+     *   quine with header
+     *     print k
+     *     print k+2
+     *     print k+1
+     *     ...
+     *     repeat H, o
+     *
+     *   -- at this point we have the header and local file header
+     *
+     *   junk containing
+     *     repeat* cdl, cd2   (cd1)
+     *     cd1
+     *     repeat* cdl, cd3   (cd2)
+     *     cd2
+     *     repeat* cdl, cd4   (cd3)
+     *     cd3
+     *     ...
+     *     repeat* cdl, cdk   (cdk-1)
+     *     cdk-1
+     *     repeat* cdl, cd1   (cdk)
+     *     cdk
+     *   repeat cdl, cd2
+     *   cd1
+     *
+     *   -- this gives us the central directory. each file's central directory
+     *   -- is the same size
+     *
+     * this entire file is composed of a few components:
+     *   the header
+     *   local file headers
+     *   central directories
+     *   fixed data (data that doesn't change between decompressions)
+     *
+     * we construct a list of these components, then combine them into a set of
+     * files after calculating the full length.
+     * */
+    public static Bytes createZip(ZipEntry[] files, QuineLayer[] layers) {
+        List<Segment> file = new ArrayList<>();
+        int k = layers.length;
+
+        Bytes header = createLocalHeaders(files);
+
+        /* offset of the crc fixing bytes within the header */
+        int crcBufferStart = header.size();
+        for (int i = 0; i < layers.length; ++i) {
+            header.append(new byte[] {0, 0, 0, 0});
+        }
+
+        Bytes[] localHeaders = new Bytes[k];
+        List<List<Integer>> localHeaderLengthOffsets = new ArrayList<>();
+        byte[][] quineLayerNames = new byte[k][];
+
+        /* local header length */
+        int lhLen = 0;
+        for (int i = 0; i < k; ++i) {
+            quineLayerNames[i] = layers[i].filename.getBytes();
+            lhLen = Math.max(lhLen, quineLayerNames[i].length);
+            localHeaderLengthOffsets.add(new ArrayList<>());
+        }
+        lhLen += LH_BASE;
+
+        /* generate local file headers */
+        for (int i = 0; i < k; ++i) {
+            Bytes localHeader = new Bytes();
+
+            /* magic bytes */
+            localHeader.append(new byte[] {
                 (byte) 0x4b,
-                (byte) 0x01,
-                (byte) 0x02,
+                (byte) 0x50,
+                (byte) 0x04,
+                (byte) 0x03,
             });
 
-            /* version made with (6.3 on dos) */
-            ret.append(new byte[] { 63, 0 });
-
             /* version needed to extract */
-            ret.append(new byte[] { 2, 0 });
+            localHeader.append(new byte[] {20, 0});
 
-            /* general purpose flags, max compression */
-            ret.append(new byte[] { 2, 0 });
+            /* general purpose flags, normal compression */
+            localHeader.append(new byte[] { 0, 0 });
 
             /* compression method, deflate */
-            ret.append(new byte[] { 8, 0 });
+            localHeader.append(new byte[] { 8, 0 });
 
-            /* last mod date and time
-             * TODO: with the one above, set these to something meaningful
-             * */
-            ret.append(new byte[] { 0, 0 });  /* last mod time */
-            ret.append(new byte[] { 0, 0 });  /* last mod date */
+            localHeader.append(new byte[] { 0, 0 });  /* last mod time */
+            localHeader.append(new byte[] { 0, 0 });  /* last mod date */
 
-            /* crc */
-            ret.append(files[i].crc);
+            /* constant crc value */
+            localHeader.append(crc);
 
-            /* compressed size */
-            ret.append(intToBytes(files[i].compressedSize, 4));
+            /* compressed size. we don't know how long the final file will be so
+             * we're just putting in zeros for now and marking that we'll fill
+             * in the true size later. */
+            localHeaderLengthOffsets.get(i).add(localHeader.size());
+            localHeader.append(new byte[] { 0, 0, 0, 0 });
 
-            /* decompressed size */
-            ret.append(intToBytes(files[i].content.size(), 4));
+            /* uncompressed size, same as above */
+            localHeaderLengthOffsets.get(i).add(localHeader.size());
+            localHeader.append(new byte[] { 0, 0, 0, 0 });
 
-            /* filename length */
-            byte[] nameBytes = files[i].filename.getBytes();
-            ret.append(intToBytes(nameBytes.length, 2));
+            /* file name length */
+            localHeader.append(intToBytes(quineLayerNames[i].length, 2));
 
             /* extra field length */
-            ret.append(new byte[] { 0, 0 });
-
-            /* file comment length */
-            ret.append(new byte[] { 0, 0 });
-
-            /* disk number start */
-            ret.append(new byte[] { 0, 0 });
-
-            /* internal file attributes */
-            ret.append(new byte[] { (byte) (files[i].isPlaintext ? 1:0), 0 });
-
-            /* external file attributes */
-            ret.append(new byte[] { 0, 0, 0, 0 });
-
-            /* relative offset of local header */
-            ret.append(intToBytes(files[i].offset, 4));
+            localHeader.append(new byte[] {0, 0});
 
             /* file name */
-            ret.append(nameBytes);
+            localHeader.append(quineLayerNames[i]);
+
+            int padding = lhLen - localHeader.size();
+
+            Bytes paddedHeader = new Bytes();
+            for (int j = 0; j < padding; ++j) {
+                paddedHeader.append((byte) 0);
+            }
+            paddedHeader.append(localHeader);
+            localHeaders[i] = paddedHeader;
+
+            localHeaderLengthOffsets.get(i).add(localHeader.size());
+            for (int j = 0; j < localHeaderLengthOffsets.get(i).size(); ++j) {
+                int base = localHeaderLengthOffsets.get(i).get(j);
+                localHeaderLengthOffsets.get(i).set(j, base + padding);
+            }
         }
-        int cdEnd = ret.size();
-        int cdSize = cdEnd - cdStart;
 
-        /* end of central directory record magic bytes */
-        ret.append(new byte[] {0x50, 0x4b, 0x05, 0x06});
+        for (int i = 0; i < k; ++i) {
+            for (Byte b: localHeaders[i]) {
+                System.out.printf("%02x ", b);
+            }
+            System.out.println();
+        }
 
-        /* number of this disk */
-        ret.append(new byte[] { 0, 0 });
-
-        /* number of the disk with the start of the central directory */
-        ret.append(new byte[] { 0, 0 });
-
-        /* total entries in the central directory on this disk */
-        ret.append(intToBytes(files.length, 2));
-
-        /* total entries in the central directory */
-        ret.append(intToBytes(files.length, 2));
-
-        /* size of the central directory */
-        ret.append(intToBytes(cdSize, 4));
-
-        /* offset of the start of central directory */
-        ret.append(intToBytes(cdStart, 4));
-
-        /* .zip file comment length */
-        ret.append(new byte[] { 0, 0 });
-
-        return ret;
+        return null;
     }
 }

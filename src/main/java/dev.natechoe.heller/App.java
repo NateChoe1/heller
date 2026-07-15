@@ -19,8 +19,9 @@ public class App {
             false
         );
 
-        Bytes b = Zip.createZip(new Zip.ZipEntry[] {file1, file2});
-        System.err.println(b.size());
-        System.out.write(b.toArray(null));
+        Zip.QuineLayer layer1 = new Zip.QuineLayer("l1.zip", null);
+        Zip.QuineLayer layer2 = new Zip.QuineLayer("layer2.zip", null);
+
+        Bytes b = Zip.createZip(new Zip.ZipEntry[] {file1, file2}, new Zip.QuineLayer[] {layer1, layer2});
     }
 }

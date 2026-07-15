@@ -564,4 +564,50 @@ public class Deflate {
 
         return ret;
     }
+
+    /* prints a quine with `tail` at the end */
+    public static Bytes junk(Bytes tail) {
+        Bytes ret = new Bytes();
+        Bytes print0 = Deflate.literalHeader(0);
+        Bytes print4 = Deflate.literalHeader(4*Deflate.CMD_SIZE);
+        Bytes repeat44 = Deflate.repeatExact(4*Deflate.CMD_SIZE, 4*Deflate.CMD_SIZE, Deflate.CMD_SIZE);
+
+        ret.append(print0);
+        ret.append(print0);
+        ret.append(print0);
+        ret.append(print4);
+        ret.append(print0);
+        ret.append(print0);
+        ret.append(print0);
+        ret.append(print4);
+        ret.append(repeat44);
+        ret.append(print4);
+        ret.append(repeat44);
+        ret.append(print4);
+        ret.append(repeat44);
+        ret.append(print4);
+        ret.append(repeat44);
+        ret.append(print4);
+
+        if (tail.size() <= 20) {
+            for (int i = ret.size(); i < 20; ++i) {
+                ret.append((byte) 0);
+            }
+            ret.append(tail);
+            return ret;
+        }
+
+        Bytes printT = Deflate.literalHeader(tail.size());
+
+        ret.append(repeat44);
+        ret.append(print0);
+        ret.append(print0);
+        ret.append(printT);
+        ret.append(repeat44);
+        ret.append(print0);
+        ret.append(print0);
+        ret.append(printT);
+        ret.append(tail);
+        return ret;
+    }
 }
