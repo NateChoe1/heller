@@ -16,6 +16,7 @@ public class Zip {
         int compressedSize;
         int modtime;
         int moddate;
+        byte[] rawFileName;
         ZipEntry(String filename, Bytes content, boolean isPlaintext) {
             this.filename = filename;
             this.content = content;
@@ -103,14 +104,14 @@ public class Zip {
             ret.append(intToBytes(content.length, 4));
 
             /* file name length */
-            byte[] nameBytes = files[i].filename.getBytes();
-            ret.append(intToBytes(nameBytes.length, 2));
+            files[i].rawFileName = files[i].filename.getBytes();
+            ret.append(intToBytes(files[i].rawFileName.length, 2));
 
             /* extra field length (0) */
             ret.append(new byte[] { 0, 0 });
 
             /* file name */
-            ret.append(nameBytes);
+            ret.append(files[i].rawFileName);
 
             /* file data */
             ret.append(compressedData);
@@ -356,8 +357,8 @@ public class Zip {
 
             /* magic bytes */
             localHeader.append(new byte[] {
-                (byte) 0x4b,
                 (byte) 0x50,
+                (byte) 0x4b,
                 (byte) 0x04,
                 (byte) 0x03,
             });
@@ -388,18 +389,164 @@ public class Zip {
             localHeader.append(new byte[] { 0, 0, 0, 0 });
 
             /* file name length */
-            localHeader.append(intToBytes(quineLayerNames[i].length, 2));
+            localHeader.append(intToBytes(quineLayerNames[(i+1)%k].length, 2));
 
             /* extra field length */
             localHeader.append(new byte[] {0, 0});
 
             /* file name */
-            localHeader.append(quineLayerNames[i]);
+            localHeader.append(quineLayerNames[(i+1)%k]);
 
             localHeaders[i] = localHeader;
         }
-
         padUniformly(localHeaders, localHeaderLengthOffsets);
+
+        Bytes[] centralDirectories = new Bytes[k];
+        List<List<Integer>> centralDirectoryLengthOffsets = new ArrayList<>();
+
+        /* generate central directories */
+        for (int i = 0; i < k; ++i) {
+            centralDirectoryLengthOffsets.add(new ArrayList<>());
+            Bytes centralDirectory = new Bytes();
+
+            for (int member: layers[i].members) {
+                centralDirectory.append(new byte[] {
+                    (byte) 0x50,
+                    (byte) 0x4b,
+                    (byte) 0x01,
+                    (byte) 0x02,
+                });
+
+                /* version made with (6.3 on dos) */
+                centralDirectory.append(new byte[] {63, 0});
+
+                /* version needed to extract */
+                centralDirectory.append(new byte[] {2, 0});
+
+                /* general purpose flags, max compression to match the output of
+                 * createLocalHeaders */
+                centralDirectory.append(new byte[] {2, 0});
+
+                /* compression method, deflate */
+                centralDirectory.append(new byte[] { 8, 0 });
+
+                centralDirectory.append(new byte[] { 0, 0 }); /* mod time */
+                centralDirectory.append(new byte[] { 0, 0 }); /* mod date */
+
+                /* crc */
+                centralDirectory.append(files[member].crc);
+
+                /* compressed size */
+                centralDirectory.append(intToBytes(files[member].compressedSize, 4));
+
+                /* decompressed size */
+                centralDirectory.append(intToBytes(files[member].content.size(), 4));
+
+                /* filename length */
+                centralDirectory.append(intToBytes(files[member].rawFileName.length, 2));
+
+                /* extra field length */
+                centralDirectory.append(new byte[] { 0, 0 });
+
+                /* file comment length */
+                centralDirectory.append(new byte[] { 0, 0 });
+
+                /* disk number start */
+                centralDirectory.append(new byte[] { 0, 0 });
+
+                /* internal file attributes */
+                centralDirectory.append(new byte[] { (byte) (files[member].isPlaintext ? 1:0), 0 });
+
+                /* external file attributes */
+                centralDirectory.append(new byte[] { 0, 0, 0, 0 });
+
+                /* relative offset of local header */
+                centralDirectory.append(intToBytes(files[member].offset, 4));
+
+                /* file name */
+                centralDirectory.append(files[member].rawFileName);
+            }
+
+            /* one last record for the quine file */
+
+            centralDirectory.append(new byte[] {
+                (byte) 0x50,
+                (byte) 0x4b,
+                (byte) 0x01,
+                (byte) 0x02,
+            });
+
+            /* version made with (6.3 on dos) */
+            centralDirectory.append(new byte[] {63, 0});
+
+            /* version needed to extract */
+            centralDirectory.append(new byte[] {2, 0});
+
+            /* general purpose flags, default compression */
+            centralDirectory.append(new byte[] {0, 0});
+
+            /* compression method, deflate */
+            centralDirectory.append(new byte[] { 8, 0 });
+
+            centralDirectory.append(new byte[] { 0, 0 }); /* mod time */
+            centralDirectory.append(new byte[] { 0, 0 }); /* mod date */
+
+            /* crc */
+            centralDirectory.append(crc);
+
+            /* compressed size, we just put in a nonce value for now */
+            centralDirectoryLengthOffsets.get(i).add(centralDirectory.size());
+            centralDirectory.append(new byte[] { 0, 0, 0, 0 });
+
+            /* decompressed size */
+            centralDirectoryLengthOffsets.get(i).add(centralDirectory.size());
+            centralDirectory.append(intToBytes(files[i].content.size(), 4));
+
+            /* filename length. note that we use the _next_ file because file i
+             * contains file i+1 */
+            centralDirectory.append(intToBytes(quineLayerNames[(i+1)%k].length, 2));
+
+            /* extra field length */
+            centralDirectory.append(new byte[] { 0, 0 });
+
+            /* file comment length */
+            centralDirectory.append(new byte[] { 0, 0 });
+
+            /* disk number start */
+            centralDirectory.append(new byte[] { 0, 0 });
+
+            /* internal file attributes */
+            centralDirectory.append(new byte[] { 0, 0 });
+
+            /* external file attributes */
+            centralDirectory.append(new byte[] { 0, 0, 0, 0 });
+
+            /* relative offset of local header. this is just the length of the
+             * header + the amount of padding in the local header. */
+            int padding = 0;
+            byte[] localHeader = localHeaders[i].toArray(null);
+            while (localHeader[padding] == 0) {
+                ++padding;
+            }
+            centralDirectory.append(intToBytes(header.size() + padding, 4));
+
+            /* file name */
+            centralDirectory.append(quineLayerNames[(i+1)%k]);
+            
+            centralDirectories[i] = centralDirectory;
+        }
+        padUniformly(centralDirectories, centralDirectoryLengthOffsets);
+
+        for (int i = 0; i < k; ++i) {
+            for (Byte b: centralDirectories[i]) {
+                System.out.printf("%02x ", b);
+            }
+            System.out.println();
+            for (int x: centralDirectoryLengthOffsets.get(i)) {
+                System.out.printf("%d ", x);
+            }
+            System.out.println();
+        }
 
         return null;
     }

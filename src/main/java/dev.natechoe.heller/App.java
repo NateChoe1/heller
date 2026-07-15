@@ -19,8 +19,8 @@ public class App {
             false
         );
 
-        Zip.QuineLayer layer1 = new Zip.QuineLayer("l1.zip", null);
-        Zip.QuineLayer layer2 = new Zip.QuineLayer("layer2.zip", null);
+        Zip.QuineLayer layer1 = new Zip.QuineLayer("l1.zip", Arrays.asList(new Integer[] {0, 1}));
+        Zip.QuineLayer layer2 = new Zip.QuineLayer("layer2.zip", Arrays.asList(new Integer[] {0, 1}));
 
         Bytes b = Zip.createZip(new Zip.ZipEntry[] {file1, file2}, new Zip.QuineLayer[] {layer1, layer2});
     }
