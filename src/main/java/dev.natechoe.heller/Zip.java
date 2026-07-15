@@ -532,7 +532,43 @@ public class Zip {
 
             /* file name */
             centralDirectory.append(quineLayerNames[(i+1)%k]);
-            
+
+            int cdSize = centralDirectory.size();
+
+            /* end of central directory record (magic bytes) */
+            centralDirectory.append(new byte[] {
+                (byte) 0x50,
+                (byte) 0x4b,
+                (byte) 0x05,
+                (byte) 0x06,
+            });
+
+            /* number of this disk */
+            centralDirectory.append(new byte[] {0, 0});
+
+            /* number of the disk with the start of the central directory */
+            centralDirectory.append(new byte[] {0, 0});
+
+            /* total entries in the central directory on this disk */
+            centralDirectory.append(intToBytes(layers[i].members.size()+1, 2));
+
+            /* total entries in the central directory */
+            centralDirectory.append(intToBytes(layers[i].members.size()+1, 2));
+
+            /* size of the central directory */
+            centralDirectory.append(intToBytes(cdSize, 4));
+
+            /* offset of the start of the central directory
+             * by convention the last value in the centralDirectoryLengthOffsets
+             * really refers to the true start of the central directory and not
+             * the total length of the file
+             * */
+            centralDirectoryLengthOffsets.get(i).add(centralDirectory.size());
+            centralDirectory.append(new byte[] {0, 0, 0, 0});
+
+            /* comment length and comment */
+            centralDirectory.append(new byte[] {0, 0});
+
             centralDirectories[i] = centralDirectory;
         }
         padUniformly(centralDirectories, centralDirectoryLengthOffsets);
