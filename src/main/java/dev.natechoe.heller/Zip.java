@@ -106,8 +106,8 @@ public class Zip {
                 (byte) 0x02,
             });
 
-            /* version made with (6.3 on unix) */
-            ret.append(new byte[] { 63, 3 });
+            /* version made with (6.3 on dos) */
+            ret.append(new byte[] { 63, 0 });
 
             /* version needed to extract */
             ret.append(new byte[] { 2, 0 });
