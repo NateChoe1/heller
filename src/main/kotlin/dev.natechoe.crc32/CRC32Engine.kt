@@ -61,9 +61,17 @@ class CRC32Engine {
          * Solves a CRC system with multiple files which potentially reference
          * each others's CRCs using Gauss-Jordan elimination.
          *
+         * There are two modes: system mode and targeted mode. In targeted mode,
+         * we have some free bytes which can be set to some arbitrary data, and
+         * the goal is to have every file's CRC equal some predetermined value.
+         *
+         * In system mode, we try to have many CRCs contain each others' CRCs.
+         * This is like targeted mode, except that the free bytes are set to
+         * each file's CRC.
+         *
+         * @param target The value of the CRC to target, or null for system mode
          * @param files A list of files to solve for CRCs. The associated map
-         * goes from offsets to file IDs, where 0 is the first file, 1 is the
-         * second, and so on.
+         * goes from offsets to free byte identities.
          * @return The CRCs of each file
          */
         @JvmStatic

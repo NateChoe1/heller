@@ -6,44 +6,21 @@ import kotlin.Pair;
 import kotlin.ULong;
 
 public class App {
-    static void p(byte[] b) {
-        for (byte bb: b) {
-            System.out.printf("\\x%02x", bb);
-        }
-    }
-    public static void main(String[] args) {
-        byte[] file1 = "xxxxdeadbeefyyyy".getBytes();
-        byte[] file2 = "deadbeefxxxxyyyy".getBytes();
+    public static void main(String[] args) throws java.io.IOException {
+        Zip.ZipEntry file1 = new Zip.ZipEntry(
+            "hi.txt",
+            new Bytes("hello world! this is a test of my .zip encoder".getBytes()),
+            true
+        );
 
-        Map<Integer, Integer> map1 = new HashMap<>();
-        Map<Integer, Integer> map2 = new HashMap<>();
+        Zip.ZipEntry file2 = new Zip.ZipEntry(
+            "data.bin",
+            new Bytes(new byte[] {(byte) 0xde, (byte) 0xad, (byte) 0xbe, (byte) 0xef, (byte) 0xba, (byte) 0xbe, (byte) 0xca, (byte) 0xfe}),
+            false
+        );
 
-        map1.put(0, 0);
-        map1.put(12, 1);
-
-        map2.put(8, 0);
-        map2.put(12, 1);
-
-        Pair<byte[], Map<Integer, Integer>> p1 = new Pair<>(file1, map1);
-        Pair<byte[], Map<Integer, Integer>> p2 = new Pair<>(file2, map2);
-
-        List<Pair<byte[], Map<Integer, Integer>>> pairs = new ArrayList<>();
-        pairs.add(p1);
-        pairs.add(p2);
-
-        List<byte[]> solutions = CRC32Engine.solveCRCSystem(new byte[]
-                {(byte) 0x6e, (byte) 0x63, (byte) 0x3c, (byte) 0x33},
-                pairs);
-        p(solutions.get(0));
-        System.out.print("deadbeef");
-        p(solutions.get(1));
-
-        System.out.println();
-
-        System.out.print("deadbeef");
-        p(solutions.get(0));
-        p(solutions.get(1));
-
-        System.out.println();
+        Bytes b = Zip.createZip(new Zip.ZipEntry[] {file1, file2});
+        System.err.println(b.size());
+        System.out.write(b.toArray(null));
     }
 }

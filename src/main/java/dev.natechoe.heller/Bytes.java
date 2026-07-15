@@ -39,7 +39,7 @@ public class Bytes implements Iterable<Byte> {
     }
 
     public byte[] toArray(byte[] dst) {
-        if (dst.length == 0) {
+        if (dst == null) {
             dst = new byte[this.data.size()];
         }
         for (int i = 0; i < Math.min(dst.length, this.data.size()); ++i) {
