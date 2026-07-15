@@ -141,6 +141,27 @@ public class Zip {
         }
     }
 
+    private static void padUniformly(Bytes[] payloads, List<List<Integer>> offsets) {
+        int l = 0;
+        for (Bytes b: payloads) {
+            l = Math.max(l, b.size());
+        }
+
+        for (int i = 0; i < payloads.length; ++i) {
+            int padding = l - payloads[i].size();
+            Bytes padded = new Bytes();
+            for (int j = 0; j < padding; ++j) {
+                padded.append((byte) 0);
+            }
+            padded.append(payloads[i]);
+            payloads[i] = padded;
+
+            for (int j = 0; j < offsets.get(i).size(); ++j) {
+                offsets.get(i).set(j, offsets.get(i).get(j) + padding);
+            }
+        }
+    }
+
     /* to make things easier, every loopy quine layer has the same crc checksum
      * and the same length. it's definitely possible to remove these
      * constraints, but it's unnecessary and makes things more complicated than
@@ -324,14 +345,10 @@ public class Zip {
         List<List<Integer>> localHeaderLengthOffsets = new ArrayList<>();
         byte[][] quineLayerNames = new byte[k][];
 
-        /* local header length */
-        int lhLen = 0;
         for (int i = 0; i < k; ++i) {
             quineLayerNames[i] = layers[i].filename.getBytes();
-            lhLen = Math.max(lhLen, quineLayerNames[i].length);
             localHeaderLengthOffsets.add(new ArrayList<>());
         }
-        lhLen += LH_BASE;
 
         /* generate local file headers */
         for (int i = 0; i < k; ++i) {
@@ -379,28 +396,10 @@ public class Zip {
             /* file name */
             localHeader.append(quineLayerNames[i]);
 
-            int padding = lhLen - localHeader.size();
-
-            Bytes paddedHeader = new Bytes();
-            for (int j = 0; j < padding; ++j) {
-                paddedHeader.append((byte) 0);
-            }
-            paddedHeader.append(localHeader);
-            localHeaders[i] = paddedHeader;
-
-            localHeaderLengthOffsets.get(i).add(localHeader.size());
-            for (int j = 0; j < localHeaderLengthOffsets.get(i).size(); ++j) {
-                int base = localHeaderLengthOffsets.get(i).get(j);
-                localHeaderLengthOffsets.get(i).set(j, base + padding);
-            }
+            localHeaders[i] = localHeader;
         }
 
-        for (int i = 0; i < k; ++i) {
-            for (Byte b: localHeaders[i]) {
-                System.out.printf("%02x ", b);
-            }
-            System.out.println();
-        }
+        padUniformly(localHeaders, localHeaderLengthOffsets);
 
         return null;
     }
