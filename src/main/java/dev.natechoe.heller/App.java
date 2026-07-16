@@ -19,37 +19,67 @@ package dev.natechoe.heller;
 
 import dev.natechoe.crc32.CRC32Engine;
 import java.util.*;
-import java.io.FileOutputStream;
+import java.nio.file.*;
+import java.io.*;
 import kotlin.Pair;
 import kotlin.ULong;
 
 public class App {
-    public static void main(String[] args) throws java.io.IOException {
-        Zip.ZipEntry file1 = new Zip.ZipEntry(
-            "hi.txt",
-            new Bytes("hello world! this is a test of my .zip encoder".getBytes()),
-            true
-        );
+    public static void main(String[] args) throws IOException {
+        List<String> inCd = new ArrayList<>();
+        Map<String, Integer> ordering = new HashMap<>();
+        List<String> zipNames = new ArrayList<>();
+        List<List<String>> zipContents = new ArrayList<>();
+        for (int i = 0; i < args.length; ++i) {
+            String filename = args[i].substring(1);
+            switch (args[i].charAt(0)) {
+                case '+':
+                    ordering.put(filename, inCd.size());
+                    inCd.add(filename);
+                    break;
+                case '@':
+                    zipNames.add(filename);
+                    zipContents.add(new ArrayList<>());
+                    break;
+                case '-':
+                    zipContents.get(zipContents.size()-1).add(filename);
+            }
+        }
 
-        Zip.ZipEntry file2 = new Zip.ZipEntry(
-            "data.bin",
-            new Bytes(new byte[] {(byte) 0xde, (byte) 0xad, (byte) 0xbe, (byte) 0xef, (byte) 0xba, (byte) 0xbe, (byte) 0xca, (byte) 0xfe}),
-            false
-        );
+        int numCommon = inCd.size();
+        int numLayers = zipNames.size();
 
-        Zip.ZipEntry file3 = new Zip.ZipEntry(
-            "loop.txt",
-            new Bytes("Okay looping time!".getBytes()),
-            true
-        );
+        Zip.ZipEntry[] commonFiles = new Zip.ZipEntry[numCommon];
+        for (int i = 0; i < numCommon; ++i) {
+            commonFiles[i] = makeZipEntry(inCd.get(i));
+        }
 
-        Zip.QuineLayer layer1 = new Zip.QuineLayer("l1.zip", Arrays.asList(new Integer[] {0}));
-        Zip.QuineLayer layer2 = new Zip.QuineLayer("layer2.zip", Arrays.asList(new Integer[] {1}));
-        Zip.QuineLayer layer3 = new Zip.QuineLayer("layer3.zip", Arrays.asList(new Integer[] {2}));
+        Zip.QuineLayer[] quines = new Zip.QuineLayer[numLayers];
+        for (int i = 0; i < numLayers; ++i) {
+            List<Integer> contentsIndexed = new ArrayList<>();
+            for (String f: zipContents.get(i)) {
+                contentsIndexed.add(ordering.get(f));
+            }
+            quines[i] = new Zip.QuineLayer(zipNames.get(i), contentsIndexed);
+        }
 
-        Bytes b = Zip.createZip(new Zip.ZipEntry[] {file1, file2, file3}, new Zip.QuineLayer[] {layer1, layer2, layer3});
-
-        FileOutputStream f = new FileOutputStream("l1.zip");
+        Bytes b = Zip.createZip(commonFiles, quines);
+        FileOutputStream f = new FileOutputStream(zipNames.get(0));
         f.write(b.toArray(null));
+    }
+
+    private static Zip.ZipEntry makeZipEntry(String filename) throws IOException {
+        Path path = FileSystems.getDefault().getPath(filename);
+        Bytes data = new Bytes(Files.readAllBytes(path));
+
+        boolean isPlaintext = true;
+        for (Byte b: data) {
+            if (Character.isISOControl(b) && b != '\n' && b != '\r') {
+                isPlaintext = false;
+                break;
+            }
+        }
+
+        return new Zip.ZipEntry(filename, data, isPlaintext);
     }
 }
