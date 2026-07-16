@@ -17,9 +17,12 @@
 
 package dev.natechoe.heller;
 
+import java.util.Map;
+import java.util.HashMap;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.zip.Deflater;
+import kotlin.Pair;
 
 import dev.natechoe.crc32.CRC32Engine;
 
@@ -137,9 +140,6 @@ public class Zip {
         return ret;
     }
 
-    /* nc<3 */
-    private final static byte[] crc = new byte[] { 0x6e, 0x63, 0x3c, 0x33 };
-
     /* how long is the repeat block before each cd */
     private final static int cdRepeatLen = 20;
 
@@ -161,7 +161,7 @@ public class Zip {
         }
     }
 
-    private static void padUniformly(Bytes[] payloads, List<List<Integer>> offsets) {
+    private static void padUniformly(Bytes[] payloads, List<List<List<Integer>>> offsets) {
         int l = 0;
         for (Bytes b: payloads) {
             l = Math.max(l, b.size());
@@ -176,8 +176,11 @@ public class Zip {
             padded.append(payloads[i]);
             payloads[i] = padded;
 
-            for (int j = 0; j < offsets.get(i).size(); ++j) {
-                offsets.get(i).set(j, offsets.get(i).get(j) + padding);
+            for (List<List<Integer>> offsetClass: offsets) {
+                List<Integer> theseOffsets = offsetClass.get(i);
+                for (int j = 0; j < theseOffsets.size(); ++j) {
+                    theseOffsets.set(j, theseOffsets.get(j) + padding);
+                }
             }
         }
     }
@@ -362,11 +365,13 @@ public class Zip {
 
         Bytes[] localHeaders = new Bytes[k];
         List<List<Integer>> localHeaderLengthOffsets = new ArrayList<>();
+        List<List<Integer>> localHeaderCRCOffsets = new ArrayList<>();
         byte[][] quineLayerNames = new byte[k][];
 
         for (int i = 0; i < k; ++i) {
             quineLayerNames[i] = layers[i].filename.getBytes();
             localHeaderLengthOffsets.add(new ArrayList<>());
+            localHeaderCRCOffsets.add(new ArrayList<>());
         }
 
         /* generate local file headers */
@@ -394,7 +399,8 @@ public class Zip {
             localHeader.append(new byte[] { 0, 0 });  /* last mod date */
 
             /* constant crc value */
-            localHeader.append(crc);
+            localHeaderCRCOffsets.get(i).add(localHeader.size());
+            localHeader.append(new byte[] { 0, 0, 0, 0 });
 
             /* compressed size. we don't know how long the final file will be so
              * we're just putting in zeros for now and marking that we'll fill
@@ -417,16 +423,21 @@ public class Zip {
 
             localHeaders[i] = localHeader;
         }
-        padUniformly(localHeaders, localHeaderLengthOffsets);
+        List<List<List<Integer>>> localHeaderOffsets = new ArrayList<>();
+        localHeaderOffsets.add(localHeaderLengthOffsets);
+        localHeaderOffsets.add(localHeaderCRCOffsets);
+        padUniformly(localHeaders, localHeaderOffsets);
 
         int lhSize = localHeaders[0].size();
 
         Bytes[] centralDirectories = new Bytes[k];
         List<List<Integer>> centralDirectoryLengthOffsets = new ArrayList<>();
+        List<List<Integer>> centralDirectoryCRCOffsets = new ArrayList<>();
 
         /* generate central directories */
         for (int i = 0; i < k; ++i) {
             centralDirectoryLengthOffsets.add(new ArrayList<>());
+            centralDirectoryCRCOffsets.add(new ArrayList<>());
             Bytes centralDirectory = new Bytes();
 
             for (int member: layers[i].members) {
@@ -512,7 +523,8 @@ public class Zip {
             centralDirectory.append(new byte[] { 0, 0 }); /* mod date */
 
             /* crc */
-            centralDirectory.append(crc);
+            centralDirectoryCRCOffsets.get(i).add(centralDirectory.size());
+            centralDirectory.append(new byte[] { 0, 0, 0, 0 });
 
             /* compressed size, we just put in a nonce value for now */
             centralDirectoryLengthOffsets.get(i).add(centralDirectory.size());
@@ -591,7 +603,10 @@ public class Zip {
 
             centralDirectories[i] = centralDirectory;
         }
-        padUniformly(centralDirectories, centralDirectoryLengthOffsets);
+        List<List<List<Integer>>> centralDirectoryOffsets = new ArrayList<>();
+        centralDirectoryOffsets.add(centralDirectoryLengthOffsets);
+        centralDirectoryOffsets.add(centralDirectoryCRCOffsets);
+        padUniformly(centralDirectories, centralDirectoryOffsets);
         int cdSize = centralDirectories[0].size();
 
         /* prepend repeat cdSize, offset to each cd */
@@ -606,9 +621,11 @@ public class Zip {
             repeat.append(centralDirectories[i]);
             centralDirectories[i] = repeat;
 
-            List<Integer> offsets = centralDirectoryLengthOffsets.get(i);
-            for (int j = 0; j < offsets.size(); ++j) {
-                offsets.set(j, offsets.get(j) + cdRepeatLen);
+            for (List<List<Integer>> offsetClass: centralDirectoryOffsets) {
+                List<Integer> offsets = offsetClass.get(i);
+                for (int j = 0; j < offsets.size(); ++j) {
+                    offsets.set(j, offsets.get(j) + cdRepeatLen);
+                }
             }
         }
 
@@ -690,12 +707,6 @@ public class Zip {
         /* repeat 1, l */
         int firstHeaderDistance = lastLocalHeader - myLhOffset;
         Bytes r1l = Deflate.repeatMinimum(lhSize, firstHeaderDistance);
-        System.out.printf("%d %d %d %d %d\n",
-                lastLocalHeader,
-                fileLen,
-                myLhOffset,
-                firstHeaderDistance,
-                r1l.size());
         quinePart.append(r1l);
         fileLen += r1l.size();
 
@@ -772,9 +783,12 @@ public class Zip {
         }
 
         Bytes[] finalFiles = new Bytes[k];
+        List<Map<Integer, Integer>> crcPositions = new ArrayList<>();
         for (int i = 0; i < k; ++i) {
+            Map<Integer, Integer> theseCRCs = new HashMap<>();
             finalFiles[i] = new Bytes();
             for (Segment s: file) {
+                int offset = finalFiles[i].size();
                 int x;
                 switch (s.type) {
                     case LITERAL:
@@ -782,6 +796,9 @@ public class Zip {
                         break;
                     case LH:
                         x = (i + s.offset) % k;
+                        for (int crcOffset: localHeaderCRCOffsets.get(x)) {
+                            theseCRCs.put(offset + crcOffset, (x+1)%k);
+                        }
                         finalFiles[i].append(localHeaders[x]);
                         break;
                     case CD:
@@ -790,9 +807,27 @@ public class Zip {
                         } else {
                             x = s.offset;
                         }
+                        for (int crcOffset: centralDirectoryCRCOffsets.get(x)) {
+                            theseCRCs.put(offset + crcOffset, (x+1)%k);
+                        }
                         finalFiles[i].append(centralDirectories[x]);
                         break;
                 }
+            }
+            crcPositions.add(theseCRCs);
+        }
+
+        List<Pair<byte[], Map<Integer, Integer>>> crcRelations = new ArrayList<>();
+        for (int i = 0; i < k; ++i) {
+            crcRelations.add(new Pair<>(finalFiles[i].toArray(null), crcPositions.get(i)));
+        }
+        List<byte[]> crcs = CRC32Engine.solveCRCSystem(null, crcRelations);
+
+        for (Map.Entry<Integer, Integer> crcInstance: crcPositions.get(0).entrySet()) {
+            int offset = crcInstance.getKey();
+            int value = crcInstance.getValue();
+            for (int i = 0; i < 4; ++i) {
+                finalFiles[0].set(offset+i, crcs.get(value)[i]);
             }
         }
 

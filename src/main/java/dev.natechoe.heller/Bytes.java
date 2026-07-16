@@ -81,4 +81,15 @@ public class Bytes implements Iterable<Byte> {
     public Iterator<Byte> iterator() {
         return this.data.iterator();
     }
+
+    public String toString() {
+        StringBuilder sb = new StringBuilder();
+        for (byte b: this.data) {
+            if (sb.length() > 0) {
+                sb.append(' ');
+            }
+            sb.append(String.format("%02x", b));
+        }
+        return sb.toString();
+    }
 }

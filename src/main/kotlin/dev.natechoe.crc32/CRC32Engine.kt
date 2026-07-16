@@ -75,7 +75,7 @@ class CRC32Engine {
          * @return The CRCs of each file
          */
         @JvmStatic
-        public fun solveCRCSystem(target: ByteArray, files: List<Pair<ByteArray, Map<Int, Int>>>): List<ByteArray> {
+        public fun solveCRCSystem(target: ByteArray?, files: List<Pair<ByteArray, Map<Int, Int>>>): List<ByteArray> {
             val n = files.size
 
             // Augmented matrix of polynomials
