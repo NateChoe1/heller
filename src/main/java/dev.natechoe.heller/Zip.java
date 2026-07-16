@@ -360,8 +360,8 @@ public class Zip {
             localHeader.append(new byte[] {
                 (byte) 0x50,
                 (byte) 0x4b,
-                (byte) 0x04,
                 (byte) 0x03,
+                (byte) 0x04,
             });
 
             /* version needed to extract */
@@ -617,9 +617,7 @@ public class Zip {
         fileLen += header.size();
 
         int p2Len = lhSize + Deflate.CMD_SIZE;
-        int headerBaseStart = fileLen;
-        int headerBaseLen = -1;
-        int headersEnd = -1;
+        int lastLocalHeader = -1;
 
         for (int i = 1; i <= k; ++i) {
             /* we want something like this
@@ -632,7 +630,7 @@ public class Zip {
              * print H
              * repeat H, o*/
             for (int j = i-2; j >= 0; --j) {
-                int thisLen = headerBaseLen + j*Deflate.CMD_SIZE;
+                int thisLen = lhSize + repeatHoBytes.size() + (j+2)*Deflate.CMD_SIZE;
                 file.add(new Segment(SegmentType.LITERAL, Deflate.literalHeader(thisLen), 0));
                 fileLen += Deflate.CMD_SIZE;
             }
@@ -640,6 +638,7 @@ public class Zip {
             file.add(new Segment(SegmentType.LITERAL, Deflate.literalHeader(p2Len), 0));
             fileLen += Deflate.CMD_SIZE;
 
+            lastLocalHeader = fileLen;
             file.add(new Segment(SegmentType.LH, null, i));
             fileLen += lhSize;
 
@@ -648,16 +647,7 @@ public class Zip {
 
             file.add(new Segment(SegmentType.LITERAL, repeatHoBytes, 0));
             fileLen += repeatHoBytes.size();
-
-            headersEnd = fileLen;
-            if (headerBaseLen == -1) {
-                headerBaseLen = headersEnd - headerBaseStart;
-            }
         }
-
-        /* print k */
-        file.add(new Segment(SegmentType.LITERAL, Deflate.literalHeader(k * Deflate.CMD_SIZE), 0));
-        fileLen += Deflate.CMD_SIZE;
 
         Bytes quinePart = new Bytes();
         /* print k+2
@@ -665,20 +655,36 @@ public class Zip {
          * ...
          * print 4
          * */
-        for (int i = k+2; k >= 4; --i) {
-            quinePart.append(Deflate.literalHeader(i * Deflate.CMD_SIZE));
+
+        /* print k */
+        quinePart.append(Deflate.literalHeader(k * Deflate.CMD_SIZE));
+        fileLen += Deflate.CMD_SIZE;
+
+        for (int i = k; i >= 2; --i) {
+            int l = lhSize + repeatHoBytes.size() + i*Deflate.CMD_SIZE;
+            quinePart.append(Deflate.literalHeader(l));
             fileLen += Deflate.CMD_SIZE;
         }
 
         /* print 2 */
-        quinePart.append(Deflate.literalHeader(2 * Deflate.CMD_SIZE));
+        quinePart.append(Deflate.literalHeader(lhSize + Deflate.CMD_SIZE));
         fileLen += Deflate.CMD_SIZE;
 
         /* repeat 1, l */
-        int firstHeaderDistance = fileLen - myLhOffset;
+        int firstHeaderDistance = lastLocalHeader - myLhOffset;
         Bytes r1l = Deflate.repeatMinimum(lhSize, firstHeaderDistance);
+        System.out.printf("%d %d %d %d %d\n",
+                lastLocalHeader,
+                fileLen,
+                myLhOffset,
+                firstHeaderDistance,
+                r1l.size());
         quinePart.append(r1l);
         fileLen += r1l.size();
+
+        /* print 2 */
+        quinePart.append(Deflate.literalHeader(Deflate.CMD_SIZE + repeatHoBytes.size()));
+        fileLen += Deflate.CMD_SIZE;
 
         /* print h */
         quinePart.append(Deflate.literalHeader(header.size()));
@@ -771,7 +777,6 @@ public class Zip {
                         break;
                 }
             }
-            System.out.println(finalFiles[i].size());
         }
 
         return finalFiles[0];
