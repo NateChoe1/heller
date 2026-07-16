@@ -37,10 +37,17 @@ public class App {
             false
         );
 
-        Zip.QuineLayer layer1 = new Zip.QuineLayer("l1.zip", Arrays.asList(new Integer[] {0, 1}));
-        Zip.QuineLayer layer2 = new Zip.QuineLayer("layer2.zip", Arrays.asList(new Integer[] {0, 1}));
+        Zip.ZipEntry file3 = new Zip.ZipEntry(
+            "loop.txt",
+            new Bytes("Okay looping time!".getBytes()),
+            true
+        );
 
-        Bytes b = Zip.createZip(new Zip.ZipEntry[] {file1, file2}, new Zip.QuineLayer[] {layer1, layer2});
+        Zip.QuineLayer layer1 = new Zip.QuineLayer("l1.zip", Arrays.asList(new Integer[] {0}));
+        Zip.QuineLayer layer2 = new Zip.QuineLayer("layer2.zip", Arrays.asList(new Integer[] {1}));
+        Zip.QuineLayer layer3 = new Zip.QuineLayer("layer3.zip", Arrays.asList(new Integer[] {2}));
+
+        Bytes b = Zip.createZip(new Zip.ZipEntry[] {file1, file2, file3}, new Zip.QuineLayer[] {layer1, layer2, layer3});
 
         FileOutputStream f = new FileOutputStream("l1.zip");
         f.write(b.toArray(null));
