@@ -123,8 +123,10 @@ public class Zip {
     /* nc<3 */
     private final static byte[] crc = new byte[] { 0x6e, 0x63, 0x3c, 0x33 };
 
+    /* how long is the repeat block before each cd */
+    private final static int cdRepeatLen = 20;
+
     private static enum SegmentType {
-        HEADER,
         LITERAL,
         LH,
         CD
@@ -331,7 +333,6 @@ public class Zip {
      * files after calculating the full length.
      * */
     public static Bytes createZip(ZipEntry[] files, QuineLayer[] layers) {
-        List<Segment> file = new ArrayList<>();
         int k = layers.length;
 
         Bytes header = createLocalHeaders(files);
@@ -400,6 +401,8 @@ public class Zip {
             localHeaders[i] = localHeader;
         }
         padUniformly(localHeaders, localHeaderLengthOffsets);
+
+        int lhSize = localHeaders[0].size();
 
         Bytes[] centralDirectories = new Bytes[k];
         List<List<Integer>> centralDirectoryLengthOffsets = new ArrayList<>();
@@ -572,18 +575,205 @@ public class Zip {
             centralDirectories[i] = centralDirectory;
         }
         padUniformly(centralDirectories, centralDirectoryLengthOffsets);
+        int cdSize = centralDirectories[0].size();
 
+        /* prepend repeat cdSize, offset to each cd */
+        cdSize += cdRepeatLen;
+        int totalCdSize = cdSize * k;
         for (int i = 0; i < k; ++i) {
-            for (Byte b: centralDirectories[i]) {
-                System.out.printf("%02x ", b);
+            int repeatTarget = (i+1) % k;
+            int repeatOffset = repeatTarget * cdSize;
+            int repeatDistance = totalCdSize - repeatOffset;
+
+            Bytes repeat = Deflate.repeatExact(cdSize, repeatDistance, cdRepeatLen, true);
+            repeat.append(centralDirectories[i]);
+            centralDirectories[i] = repeat;
+
+            List<Integer> offsets = centralDirectoryLengthOffsets.get(i);
+            for (int j = 0; j < offsets.size(); ++j) {
+                offsets.set(j, offsets.get(j) + cdRepeatLen);
             }
-            System.out.println();
-            for (int x: centralDirectoryLengthOffsets.get(i)) {
-                System.out.printf("%d ", x);
-            }
-            System.out.println();
         }
 
-        return null;
+        List<Segment> file = new ArrayList<>();
+        List<Integer> headerLocations = new ArrayList<>();
+        int fileLen = 0;
+
+        headerLocations.add(fileLen);
+        file.add(new Segment(SegmentType.LITERAL, header, 0));
+        fileLen += header.size();
+
+        int myLhOffset = fileLen;
+        file.add(new Segment(SegmentType.LH, null, 0));
+        fileLen += lhSize;
+
+        file.add(new Segment(SegmentType.LITERAL, Deflate.literalHeader(header.size()), 0));
+        fileLen += Deflate.CMD_SIZE;
+        int HoOffset = fileLen;
+        Bytes repeatHoBytes = Deflate.repeatGreedy(header.size(), HoOffset);
+
+        headerLocations.add(fileLen);
+        file.add(new Segment(SegmentType.LITERAL, header, 0));
+        fileLen += header.size();
+
+        int p2Len = lhSize + Deflate.CMD_SIZE;
+        int headerBaseStart = fileLen;
+        int headerBaseLen = -1;
+        int headersEnd = -1;
+
+        for (int i = 1; i <= k; ++i) {
+            /* we want something like this
+             *
+             * print 6
+             * print 5
+             * print 4
+             * print 2
+             * LH5
+             * print H
+             * repeat H, o*/
+            for (int j = i-2; j >= 0; --j) {
+                int thisLen = headerBaseLen + j*Deflate.CMD_SIZE;
+                file.add(new Segment(SegmentType.LITERAL, Deflate.literalHeader(thisLen), 0));
+                fileLen += Deflate.CMD_SIZE;
+            }
+
+            file.add(new Segment(SegmentType.LITERAL, Deflate.literalHeader(p2Len), 0));
+            fileLen += Deflate.CMD_SIZE;
+
+            file.add(new Segment(SegmentType.LH, null, i));
+            fileLen += lhSize;
+
+            file.add(new Segment(SegmentType.LITERAL, Deflate.literalHeader(header.size()), 0));
+            fileLen += Deflate.CMD_SIZE;
+
+            file.add(new Segment(SegmentType.LITERAL, repeatHoBytes, 0));
+            fileLen += repeatHoBytes.size();
+
+            headersEnd = fileLen;
+            if (headerBaseLen == -1) {
+                headerBaseLen = headersEnd - headerBaseStart;
+            }
+        }
+
+        /* print k */
+        file.add(new Segment(SegmentType.LITERAL, Deflate.literalHeader(k * Deflate.CMD_SIZE), 0));
+        fileLen += Deflate.CMD_SIZE;
+
+        Bytes quinePart = new Bytes();
+        /* print k+2
+         * print k+1
+         * ...
+         * print 4
+         * */
+        for (int i = k+2; k >= 4; --i) {
+            quinePart.append(Deflate.literalHeader(i * Deflate.CMD_SIZE));
+            fileLen += Deflate.CMD_SIZE;
+        }
+
+        /* print 2 */
+        quinePart.append(Deflate.literalHeader(2 * Deflate.CMD_SIZE));
+        fileLen += Deflate.CMD_SIZE;
+
+        /* repeat 1, l */
+        int firstHeaderDistance = fileLen - myLhOffset;
+        Bytes r1l = Deflate.repeatMinimum(lhSize, firstHeaderDistance);
+        quinePart.append(r1l);
+        fileLen += r1l.size();
+
+        /* print h */
+        quinePart.append(Deflate.literalHeader(header.size()));
+        fileLen += Deflate.CMD_SIZE;
+
+        /* repeat H, o */
+        quinePart.append(repeatHoBytes);
+        fileLen += repeatHoBytes.size();
+
+        Bytes quine = Deflate.quine(quinePart);
+        fileLen += quine.size();
+
+        file.add(new Segment(SegmentType.LITERAL, quinePart, 0));
+        file.add(new Segment(SegmentType.LITERAL, quine, 0));
+
+        Bytes cdDumpster = Deflate.dumpster(totalCdSize);
+        file.add(new Segment(SegmentType.LITERAL, cdDumpster, 0));
+        fileLen += cdDumpster.size();
+
+        for (int i = 0; i < k; ++i) {
+            file.add(new Segment(SegmentType.CD, null, i));
+            fileLen += cdSize;
+        }
+
+        int cdStart = fileLen;
+        file.add(new Segment(SegmentType.CD, null, -1));
+        fileLen += cdSize;
+
+        /* we've now built the zip file structure, now we have to construct the
+         * zip files */
+
+        int[] cdStarts = new int[k];
+
+        for (int i = 0; i < k; ++i) {
+            for (cdStarts[i] = cdRepeatLen; cdStarts[i] < cdSize; ++cdStarts[i]) {
+                if (centralDirectories[i].get(cdStarts[i]) != 0) {
+                    break;
+                }
+            }
+            cdStarts[i] += cdStart;
+        }
+
+        /* since we know the total file length we can start filling in the
+         * unknowns from earlier */
+        byte[] fileLenBytes = intToBytes(fileLen, 4);
+        for (int i = 0; i < k; ++i) {
+            for (int offset: localHeaderLengthOffsets.get(i)) {
+                for (int j = 0; j < 4; ++j) {
+                    localHeaders[i].set(offset+j, fileLenBytes[j]);
+                }
+            }
+
+            List<Integer> cdOffsets = centralDirectoryLengthOffsets.get(i);
+            for (int offset: cdOffsets) {
+                for (int j = 0; j < 4; ++j) {
+                    centralDirectories[i].set(offset+j, fileLenBytes[j]);
+                }
+            }
+
+            int finalOffset = cdOffsets.get(cdOffsets.size()-1);
+            /* the final value in centralDirectoryLengthOffsets refers to the
+             * true start of the central directory and not the total length of
+             * the file */
+            byte[] cdStartBytes = intToBytes(cdStarts[i], 4);
+            for (int j = 0; j < 4; ++j) {
+                centralDirectories[i].set(finalOffset+j, cdStartBytes[j]);
+            }
+        }
+
+        Bytes[] finalFiles = new Bytes[k];
+        for (int i = 0; i < k; ++i) {
+            finalFiles[i] = new Bytes();
+            for (Segment s: file) {
+                int x;
+                switch (s.type) {
+                    case LITERAL:
+                        finalFiles[i].append(s.data);
+                        break;
+                    case LH:
+                        x = (i + s.offset) % k;
+                        finalFiles[i].append(localHeaders[x]);
+                        break;
+                    case CD:
+                        if (s.offset == -1) {
+                            x = i;
+                        } else {
+                            x = s.offset;
+                        }
+                        finalFiles[i].append(centralDirectories[x]);
+                        break;
+                }
+            }
+            System.out.println(finalFiles[i].size());
+        }
+
+        return finalFiles[0];
     }
 }

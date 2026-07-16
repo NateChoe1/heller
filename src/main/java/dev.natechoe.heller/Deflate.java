@@ -15,6 +15,8 @@ public class Deflate {
     private static String[] fixedCodes;
     private static String[] distanceCodes;
 
+    private static final int REPEAT_MIN_LIM = 30;
+
     public static Bytes literalHeader(int length, boolean bfinal) {
         if (length > 0xffff) {
             return null;
@@ -424,6 +426,15 @@ public class Deflate {
         return Deflate.repeatExact(length, offset, target, false);
     }
 
+    public static Bytes repeatMinimum(int length, int offset, boolean bfinal) {
+        List<Bytes> candidates = Deflate.repeat(length, offset, REPEAT_MIN_LIM, bfinal);
+        return candidates.get(0);
+    }
+
+    public static Bytes repeatMinimum(int length, int offset) {
+        return Deflate.repeatMinimum(length, offset, false);
+    }
+
     public static Bytes repeatGreedy(int length, int offset, boolean bfinal) {
         BitTree ret = new BitTree("010", bfinal);
         int encodedLength = 3;
@@ -565,8 +576,8 @@ public class Deflate {
         return ret;
     }
 
-    /* prints a quine with `tail` at the end */
-    public static Bytes junk(Bytes tail) {
+    /* prints a quine that allows for `n` bytes of junk at the end */
+    public static Bytes dumpster(int n) {
         Bytes ret = new Bytes();
         Bytes print0 = Deflate.literalHeader(0);
         Bytes print4 = Deflate.literalHeader(4*Deflate.CMD_SIZE);
@@ -589,15 +600,14 @@ public class Deflate {
         ret.append(repeat44);
         ret.append(print4);
 
-        if (tail.size() <= 20) {
-            for (int i = ret.size(); i < 20; ++i) {
+        if (n <= Deflate.CMD_SIZE*4) {
+            for (int i = n; i < Deflate.CMD_SIZE*4; ++i) {
                 ret.append((byte) 0);
             }
-            ret.append(tail);
             return ret;
         }
 
-        Bytes printT = Deflate.literalHeader(tail.size());
+        Bytes printT = Deflate.literalHeader(n);
 
         ret.append(repeat44);
         ret.append(print0);
@@ -607,6 +617,12 @@ public class Deflate {
         ret.append(print0);
         ret.append(print0);
         ret.append(printT);
+        return ret;
+    }
+
+    /* prints a quine with `tail` at the end */
+    public static Bytes junk(Bytes tail) {
+        Bytes ret = Deflate.dumpster(tail.size());
         ret.append(tail);
         return ret;
     }

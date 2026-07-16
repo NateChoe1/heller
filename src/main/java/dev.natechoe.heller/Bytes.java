@@ -52,6 +52,14 @@ public class Bytes implements Iterable<Byte> {
         return this.data.size();
     }
 
+    public Byte get(int i) {
+        return this.data.get(i);
+    }
+
+    public Byte set(int i, Byte b) {
+        return this.data.set(i, b);
+    }
+
     @Override
     public Iterator<Byte> iterator() {
         return this.data.iterator();

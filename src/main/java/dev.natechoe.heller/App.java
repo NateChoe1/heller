@@ -2,6 +2,7 @@ package dev.natechoe.heller;
 
 import dev.natechoe.crc32.CRC32Engine;
 import java.util.*;
+import java.io.FileOutputStream;
 import kotlin.Pair;
 import kotlin.ULong;
 
@@ -23,5 +24,8 @@ public class App {
         Zip.QuineLayer layer2 = new Zip.QuineLayer("layer2.zip", Arrays.asList(new Integer[] {0, 1}));
 
         Bytes b = Zip.createZip(new Zip.ZipEntry[] {file1, file2}, new Zip.QuineLayer[] {layer1, layer2});
+
+        FileOutputStream f = new FileOutputStream("l1.zip");
+        f.write(b.toArray(null));
     }
 }
