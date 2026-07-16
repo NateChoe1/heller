@@ -10,4 +10,8 @@ program can generate zip quines of any order using a more generalized method.
 
 ## Usage:
 
-    heller +f1 +f2 +f3 @1.zip -f1 @2.zip -f2 @3.zip -f3
+    java -jar heller.jar +f1 +f2 +f3 @1.zip -f1 @2.zip -f2 @3.zip -f3
+
+## Building
+
+    mvn package
