@@ -641,6 +641,7 @@ public class Zip {
         file.add(new Segment(SegmentType.LH, null, 0));
         fileLen += lhSize;
 
+        int compressedFormStart = fileLen;
         file.add(new Segment(SegmentType.LITERAL, Deflate.literalHeader(header.size()), 0));
         fileLen += Deflate.CMD_SIZE;
         int HoOffset = fileLen;
@@ -737,6 +738,7 @@ public class Zip {
             fileLen += cdSize;
         }
 
+        int compressedFormEnd = fileLen + cdRepeatLen;
         int cdStart = fileLen;
         file.add(new Segment(SegmentType.CD, null, -1));
         fileLen += cdSize;
@@ -745,6 +747,7 @@ public class Zip {
          * zip files */
 
         int[] cdStarts = new int[k];
+        int compressedFormLen = compressedFormEnd - compressedFormStart;
 
         for (int i = 0; i < k; ++i) {
             for (cdStarts[i] = cdRepeatLen; cdStarts[i] < cdSize; ++cdStarts[i]) {
@@ -758,17 +761,35 @@ public class Zip {
         /* since we know the total file length we can start filling in the
          * unknowns from earlier */
         byte[] fileLenBytes = intToBytes(fileLen, 4);
+        byte[] compressedLenBytes = intToBytes(compressedFormLen, 4);
         for (int i = 0; i < k; ++i) {
+            boolean isFirst = true;
+
             for (int offset: localHeaderLengthOffsets.get(i)) {
+                byte[] bytes;
+                if (isFirst) {
+                    bytes = compressedLenBytes;
+                    isFirst = false;
+                } else {
+                    bytes = fileLenBytes;
+                }
                 for (int j = 0; j < 4; ++j) {
-                    localHeaders[i].set(offset+j, fileLenBytes[j]);
+                    localHeaders[i].set(offset+j, bytes[j]);
                 }
             }
 
             List<Integer> cdOffsets = centralDirectoryLengthOffsets.get(i);
+            isFirst = true;
             for (int offset: cdOffsets) {
+                byte[] bytes;
+                if (isFirst) {
+                    bytes = compressedLenBytes;
+                    isFirst = false;
+                } else {
+                    bytes = fileLenBytes;
+                }
                 for (int j = 0; j < 4; ++j) {
-                    centralDirectories[i].set(offset+j, fileLenBytes[j]);
+                    centralDirectories[i].set(offset+j, bytes[j]);
                 }
             }
 
